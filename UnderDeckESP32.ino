@@ -67,6 +67,8 @@ void monitorActiveSensors();
 void enableSensorMonitor(int pin, const char* type);
 void disableSensorMonitor(int pin, const char* type);
 
+Serial.print("{'action':'starting'}");
+
 void setup() {
   Serial.begin(115200);
   delay(1000);
