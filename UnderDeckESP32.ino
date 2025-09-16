@@ -209,10 +209,11 @@ void connectToWebSocket() {
   if (WiFi.status() == WL_CONNECTED) {
     String url = websocket_path;
     url += current_mac_address;
-
-    Serial.print("Attempting to connect to wss://");
-    Serial.print(websocket_server_host);
-    Serial.println(url);
+    if (debug_mode == 1){
+      Serial.print("Attempting to connect to wss://");
+      Serial.print(websocket_server_host);
+      Serial.println(url);
+    }
 
     webSocketClient.beginSSL(websocket_server_host, websocket_server_port, url.c_str());
     webSocketClient.onEvent(webSocketEvent);
@@ -388,9 +389,11 @@ void handleCommand(String payload, bool isSerial) {
   }
 
   serializeJson(responseDoc, response);
-  if (debug_mode == 1) Serial.println(response);
   if (!isSerial) {
     webSocketClient.sendTXT(response);
+    if (debug_mode == 1) Serial.println(response);
+  } else {
+    Serial.println(response);
   }
 }
 
