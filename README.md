@@ -263,4 +263,3 @@ This documentation details the JSON commands that can be sent to the ESP32 via W
     ```json
     {"action":"sensor_update","type":"touch","pin":4,"value":50,"timestamp":1234567}
     ```
-```
