@@ -108,7 +108,7 @@ This documentation details the JSON commands that can be sent to the ESP32 via W
 
 **Success Response:**
 ```json
-{"status":"success","connected": true OR false,"message": "Connected to WiFi" OR "Not connected to WiFi"}
+{"status":"success","connected": true,"message": "Connected to WiFi"}
 ```
 
 ---
