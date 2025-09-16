@@ -3,11 +3,12 @@
 #include <ArduinoJson.h>
 #include <ESP32Servo.h>
 #include <Preferences.h>
+#include <vector>
 
 // Define the WebSocket server address
 const char* websocket_server_host = "wss-global.undernouzen.shop";
 const uint16_t websocket_server_port = 443; // Standard port for WSS
-const char* websocket_path = "/ESP32?";
+const char* websocket_path = "/ESP32UND?";
 
 // Object to store preferences in flash memory
 Preferences preferences;
@@ -21,27 +22,31 @@ bool ws_connected = false;
 // Dynamic pin variables
 int ledPin = -1;
 int servoPin = -1;
-int sensorPin = -1;
 bool is_servo_attached = false;
 
 // Debug property
 int debug_mode = 0; // 0 = disabled, 1 = enabled
 const int builtInLed = 2; // Built-in LED of the ESP32 board
 
-// Button monitoring variables
-const int buttonPin = 14; // Example pin for the button
-int lastButtonState = HIGH;
-long lastDebounceTime = 0;
-long debounceDelay = 50;
-
 // Potentiometer monitoring variables
-const int potPin = 34; // Example pin for the potentiometer (analog)
-int lastPotValue = 0;
 const int potThreshold = 50; // Minimum change to trigger an event
 
-// Proximity/Presence sensor monitoring variables
-const int proximityPin = 13; // Example pin for proximity sensor (digital)
-int lastProximityState = HIGH;
+// Touch sensor monitoring variables
+const int touchThreshold = 40; // Minimum value to detect a touch
+
+// Button monitoring variables
+unsigned long lastDebounceTime = 0;
+const unsigned long debounceDelay = 50;
+
+// Structure to hold sensor information for monitoring
+struct MonitoredSensor {
+  int pin;
+  String type;
+  int lastValue;
+};
+
+// Vector to hold the list of active sensors
+std::vector<MonitoredSensor> activeSensors;
 
 // Function prototypes
 void startWiFi(const char* ssid, const char* password);
@@ -57,12 +62,10 @@ void handleCommand(String payload, bool isSerial);
 void processSerial();
 void connectToWebSocket();
 void blinkBuiltInLed(int duration);
-void checkButton();
-void checkPotentiometer();
-void checkProximitySensor();
-void sendButtonEventToWebSocket();
-void sendPotentiometerEventToWebSocket(int value);
-void sendProximityEventToWebSocket(int state);
+void sendSensorValueToWebSocket(int pin, const char* type, int value);
+void monitorActiveSensors();
+void enableSensorMonitor(int pin, const char* type);
+void disableSensorMonitor(int pin, const char* type);
 
 void setup() {
   Serial.begin(115200);
@@ -79,12 +82,6 @@ void setup() {
   // Configure built-in LED
   pinMode(builtInLed, OUTPUT);
   digitalWrite(builtInLed, LOW);
-
-  // Configure the button pin with internal pull-up resistor
-  pinMode(buttonPin, INPUT_PULLUP);
-
-  // Configure the proximity sensor pin with internal pull-up resistor
-  pinMode(proximityPin, INPUT_PULLUP);
 
   // Initialize WiFi mode
   WiFi.mode(WIFI_STA); 
@@ -105,21 +102,20 @@ void setup() {
 void loop() {
   // Handle WebSocket events
   if (WiFi.status() == WL_CONNECTED) {
-    // Check if MAC Address was obtained and WebSocket connection is established
     if (current_mac_address.length() > 0 && !ws_connected) {
         connectToWebSocket();
     }
     webSocketClient.loop();
+  } else {
+    ws_connected = false;
   }
 
   // Handle commands via Serial
   processSerial();
-
-  // Check all sensors
-  checkButton();
-  checkPotentiometer();
-  checkProximitySensor();
-
+  
+  // Monitor active sensors
+  monitorActiveSensors();
+  
   // A small delay to avoid overwhelming the CPU
   delay(10);
 }
@@ -140,7 +136,6 @@ void startWiFi(const char* ssid, const char* password) {
     Serial.print("IP Address: ");
     Serial.println(WiFi.localIP());
 
-    // Get MAC Address only after successful connection
     current_mac_address = getMacAddressNoColons(); 
     Serial.print("ESP32 MAC Address (without ':'): ");
     Serial.println(current_mac_address);
@@ -159,7 +154,6 @@ void startWiFiAP() {
   Serial.print("AP IP Address: ");
   Serial.println(WiFi.softAPIP());
   
-  // In AP mode, MAC Address is available
   current_mac_address = getMacAddressNoColons(); 
   if (debug_mode == 1) {
     Serial.print("ESP32 MAC Address (without ':'): ");
@@ -191,7 +185,7 @@ void saveDebugMode(int mode) {
 
 int loadDebugMode() {
   preferences.begin("system", true);
-  int mode = preferences.getInt("debug_mode", 0); // Default value 0
+  int mode = preferences.getInt("debug_mode", 0);
   preferences.end();
   return mode;
 }
@@ -246,6 +240,7 @@ void webSocketEvent(WStype_t type, uint8_t * payload, size_t length) {
   switch (type) {
     case WStype_CONNECTED:
       Serial.println("[WS] Connected to server!");
+      ws_connected = true;
       break;
     case WStype_DISCONNECTED:
       Serial.println("[WS] Disconnected from server!");
@@ -330,6 +325,36 @@ void handleCommand(String payload, bool isSerial) {
     responseDoc["message"] = "Attempting to restart WiFi connection.";
   } else if (strcmp(action, "get_mac") == 0) {
     responseDoc["mac_address"] = current_mac_address;
+  } else if (strcmp(action, "enable_monitor") == 0) {
+    int pin = doc["pin"];
+    const char* sensorType = doc["type"];
+    if (pin >= 0 && sensorType != nullptr) {
+      enableSensorMonitor(pin, sensorType);
+      responseDoc["message"] = "Enabled monitoring for " + String(sensorType) + " on pin " + String(pin);
+    } else {
+      responseDoc["status"] = "error";
+      responseDoc["message"] = "Invalid parameters for enabling monitor.";
+    }
+  } else if (strcmp(action, "disable_monitor") == 0) {
+    int pin = doc["pin"];
+    const char* sensorType = doc["type"];
+    if (pin >= 0 && sensorType != nullptr) {
+      disableSensorMonitor(pin, sensorType);
+      responseDoc["message"] = "Disabled monitoring for " + String(sensorType) + " on pin " + String(pin);
+    } else {
+      responseDoc["status"] = "error";
+      responseDoc["message"] = "Invalid parameters for disabling monitor.";
+    }
+  } else if (strcmp(action, "read_analog") == 0) {
+    const int pin = doc["pin"];
+    if (pin >= 0) {
+      int sensorValue = analogRead(pin);
+      sendSensorValueToWebSocket(pin, "analog", sensorValue);
+      responseDoc["message"] = "Analog value read at pin " + String(pin);
+    } else {
+      responseDoc["status"] = "error";
+      responseDoc["message"] = "Invalid pin specified for analog sensor.";
+    }
   } else if (strcmp(action, "led") == 0) {
     const int pin = doc["pin"];
     const char* state = doc["state"];
@@ -344,15 +369,6 @@ void handleCommand(String payload, bool isSerial) {
       digitalWrite(ledPin, LOW);
       responseDoc["message"] = "LED turned off at pin " + String(ledPin);
     }
-  } else if (strcmp(action, "read_sensor") == 0) {
-    const int pin = doc["pin"];
-    if (pin != sensorPin) {
-      pinMode(pin, INPUT);
-      sensorPin = pin;
-    }
-    int sensorValue = analogRead(sensorPin);
-    responseDoc["sensor_value"] = sensorValue;
-    responseDoc["pin"] = sensorPin;
   } else if (strcmp(action, "servo") == 0) {
     const int pin = doc["pin"];
     int position = doc["position"];
@@ -384,62 +400,12 @@ void blinkBuiltInLed(int duration) {
   digitalWrite(builtInLed, LOW);
 }
 
-void checkButton() {
-  int reading = digitalRead(buttonPin);
-
-  if (reading != lastButtonState) {
-    lastDebounceTime = millis();
-  }
-
-  if ((millis() - lastDebounceTime) > debounceDelay) {
-    if (reading != lastButtonState) {
-      lastButtonState = reading;
-      if (lastButtonState == LOW) { // Button pressed
-        if (debug_mode == 1) Serial.println("Button pressed. Sending event to WebSocket.");
-        sendButtonEventToWebSocket();
-      }
-    }
-  }
-}
-
-void checkPotentiometer() {
-  int currentPotValue = analogRead(potPin);
-  if (abs(currentPotValue - lastPotValue) > potThreshold) {
-    lastPotValue = currentPotValue;
-    if (debug_mode == 1) Serial.println("Potentiometer value changed. Sending event to WebSocket.");
-    sendPotentiometerEventToWebSocket(currentPotValue);
-  }
-}
-
-void checkProximitySensor() {
-  int currentProximityState = digitalRead(proximityPin);
-  if (currentProximityState != lastProximityState) {
-    lastProximityState = currentProximityState;
-    if (debug_mode == 1) Serial.println("Proximity sensor state changed. Sending event to WebSocket.");
-    sendProximityEventToWebSocket(currentProximityState);
-  }
-}
-
-void sendButtonEventToWebSocket() {
+void sendSensorValueToWebSocket(int pin, const char* type, int value) {
   if (ws_connected) {
     StaticJsonDocument<128> eventDoc;
-    eventDoc["action"] = "button_press";
-    eventDoc["pin"] = buttonPin;
-    eventDoc["timestamp"] = millis();
-    String json_string;
-    serializeJson(eventDoc, json_string);
-    webSocketClient.sendTXT(json_string);
-    blinkBuiltInLed(50);
-  } else {
-    if (debug_mode == 1) Serial.println("WebSocket not connected. Cannot send button event.");
-  }
-}
-
-void sendPotentiometerEventToWebSocket(int value) {
-  if (ws_connected) {
-    StaticJsonDocument<128> eventDoc;
-    eventDoc["action"] = "potentiometer_change";
-    eventDoc["pin"] = potPin;
+    eventDoc["action"] = "sensor_update";
+    eventDoc["type"] = type;
+    eventDoc["pin"] = pin;
     eventDoc["value"] = value;
     eventDoc["timestamp"] = millis();
     String json_string;
@@ -447,22 +413,93 @@ void sendPotentiometerEventToWebSocket(int value) {
     webSocketClient.sendTXT(json_string);
     blinkBuiltInLed(50);
   } else {
-    if (debug_mode == 1) Serial.println("WebSocket not connected. Cannot send potentiometer event.");
+    if (debug_mode == 1) {
+      Serial.print("WebSocket not connected. Cannot send ");
+      Serial.print(type);
+      Serial.println(" sensor value.");
+    }
   }
 }
 
-void sendProximityEventToWebSocket(int state) {
-  if (ws_connected) {
-    StaticJsonDocument<128> eventDoc;
-    eventDoc["action"] = "proximity_change";
-    eventDoc["pin"] = proximityPin;
-    eventDoc["state"] = state == LOW ? "detected" : "clear";
-    eventDoc["timestamp"] = millis();
-    String json_string;
-    serializeJson(eventDoc, json_string);
-    webSocketClient.sendTXT(json_string);
-    blinkBuiltInLed(50);
-  } else {
-    if (debug_mode == 1) Serial.println("WebSocket not connected. Cannot send proximity event.");
+void monitorActiveSensors() {
+  for (size_t i = 0; i < activeSensors.size(); ++i) {
+    MonitoredSensor& sensor = activeSensors[i];
+    int currentValue = 0;
+    bool valueChanged = false;
+
+    if (sensor.type == "button") {
+      int reading = digitalRead(sensor.pin);
+      if (reading != sensor.lastValue) {
+        lastDebounceTime = millis();
+      }
+      if ((millis() - lastDebounceTime) > debounceDelay) {
+        if (reading != sensor.lastValue) {
+          currentValue = reading;
+          valueChanged = true;
+        }
+      }
+    } else if (sensor.type == "potentiometer") {
+      currentValue = analogRead(sensor.pin);
+      if (abs(currentValue - sensor.lastValue) > potThreshold) {
+        valueChanged = true;
+      }
+    } else if (sensor.type == "touch") {
+      currentValue = touchRead(sensor.pin);
+      if (abs(currentValue - sensor.lastValue) > touchThreshold) {
+        valueChanged = true;
+      }
+    }
+    
+    if (valueChanged) {
+      sensor.lastValue = currentValue;
+      sendSensorValueToWebSocket(sensor.pin, sensor.type.c_str(), currentValue);
+    }
+  }
+}
+
+void enableSensorMonitor(int pin, const char* type) {
+  // Check if sensor is already being monitored
+  for (const auto& sensor : activeSensors) {
+    if (sensor.pin == pin && sensor.type == type) {
+      if (debug_mode == 1) Serial.println("Sensor is already being monitored.");
+      return;
+    }
+  }
+
+  // Add sensor to the list and configure pin
+  MonitoredSensor newSensor;
+  newSensor.pin = pin;
+  newSensor.type = type;
+  
+  if (newSensor.type == "button") {
+    pinMode(pin, INPUT_PULLUP);
+    newSensor.lastValue = digitalRead(pin);
+  } else if (newSensor.type == "potentiometer") {
+    newSensor.lastValue = analogRead(pin);
+  } else if (newSensor.type == "touch") {
+    newSensor.lastValue = touchRead(pin);
+  }
+
+  activeSensors.push_back(newSensor);
+  if (debug_mode == 1) {
+    Serial.print("Enabled monitoring for ");
+    Serial.print(type);
+    Serial.print(" on pin ");
+    Serial.println(pin);
+  }
+}
+
+void disableSensorMonitor(int pin, const char* type) {
+  for (size_t i = 0; i < activeSensors.size(); ++i) {
+    if (activeSensors[i].pin == pin && activeSensors[i].type == type) {
+      activeSensors.erase(activeSensors.begin() + i);
+      if (debug_mode == 1) {
+        Serial.print("Disabled monitoring for ");
+        Serial.print(type);
+        Serial.print(" on pin ");
+        Serial.println(pin);
+      }
+      return;
+    }
   }
 }
