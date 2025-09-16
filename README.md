@@ -98,6 +98,36 @@ This documentation details the JSON commands that can be sent to the ESP32 via W
 
 ---
 
+### `get_status`
+> Requests the ESP32 wifi status.
+
+**Command Example:**
+```json
+{"action":"get_status"}
+```
+
+**Success Response:**
+```json
+{"status":"success","connected": true OR false,"message": "Connected to WiFi" OR "Not connected to WiFi"}
+```
+
+---
+
+### `get_device_info`
+> Requests the ESP32 info.
+
+**Command Example:**
+```json
+{"action":"get_device_info"}
+```
+
+**Success Response:**
+```json
+{"status":"success","hostname": "esp32-xxxxxx","mac_address": "AABBCCDDEEFF"}
+```
+
+---
+
 ### `set_debug`
 > Enables (`1`) or disables (`0`) detailed serial debug output. The setting is saved to flash.
 

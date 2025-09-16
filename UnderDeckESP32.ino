@@ -288,6 +288,7 @@ void handleCommand(String payload, bool isSerial) {
   String response;
   StaticJsonDocument<128> responseDoc;
   responseDoc["status"] = "success";
+  responseDoc["action"] = action;
 
   if (action == nullptr) {
     responseDoc["status"] = "error";
@@ -325,6 +326,13 @@ void handleCommand(String payload, bool isSerial) {
     }
     responseDoc["message"] = "Attempting to restart WiFi connection.";
   } else if (strcmp(action, "get_mac") == 0) {
+    responseDoc["mac_address"] = current_mac_address;
+  } else if (strcmp(action, "get_status") == 0) {
+    bool isConnected = WiFi.status() == WL_CONNECTED;
+    responseDoc["connected"] = isConnected;
+    responseDoc["message"] = isConnected ? "Connected to WiFi" : "Not connected to WiFi";
+  } else if (strcmp(action, "get_device_info") == 0) {
+    responseDoc["hostname"] = WiFi.getHostname();
     responseDoc["mac_address"] = current_mac_address;
   } else if (strcmp(action, "enable_monitor") == 0) {
     int pin = doc["pin"];
