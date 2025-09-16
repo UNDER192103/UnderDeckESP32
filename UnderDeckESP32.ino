@@ -414,6 +414,7 @@ void sendSensorValueToWebSocket(int pin, const char* type, int value) {
     String json_string;
     serializeJson(eventDoc, json_string);
     webSocketClient.sendTXT(json_string);
+    Serial.println(json_string);
     blinkBuiltInLed(50);
   } else {
     if (debug_mode == 1) {
